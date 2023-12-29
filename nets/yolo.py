@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 from nets.backbone import Backbone, C2f, Conv
 from nets.yolo_training import weights_init
 from utils.utils_bbox import make_anchors
@@ -47,6 +47,33 @@ class DFL(nn.Module):
         # 以softmax的方式，对0~16的数字计算百分比，获得最终数字。
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
+
+class AODnet(nn.Module):  
+    #AOD去雾模块 
+    def __init__(self):
+        super(AODnet, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=1)
+        self.conv2 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(in_channels=6, out_channels=3, kernel_size=5, padding=2)
+        self.conv4 = nn.Conv2d(in_channels=6, out_channels=3, kernel_size=7, padding=3)
+        self.conv5 = nn.Conv2d(in_channels=12, out_channels=3, kernel_size=3, padding=1)
+        self.b = 1
+
+    def forward(self, x):  
+        x1 = F.relu(self.conv1(x))
+        x2 = F.relu(self.conv2(x1))
+        cat1 = torch.cat((x1, x2), 1)
+        x3 = F.relu(self.conv3(cat1))
+        cat2 = torch.cat((x2, x3),1)
+        x4 = F.relu(self.conv4(cat2))
+        cat3 = torch.cat((x1, x2, x3, x4),1)
+        k = F.relu(self.conv5(cat3))
+
+        if k.size() != x.size():
+            raise Exception("k, haze image are different size!")
+
+        output = k * x - k + self.b
+        return F.relu(output)
         
 #---------------------------------------------------#
 #   yolo_body
@@ -72,6 +99,7 @@ class YoloBody(nn.Module):
         #   512, 40, 40
         #   1024 * deep_mul, 20, 20
         #---------------------------------------------------#
+        self.AOD = AODnet()         #加载去雾模块
         self.backbone   = Backbone(base_channels, base_depth, deep_mul, phi, pretrained=pretrained)
 
         #------------------------加强特征提取网络------------------------# 
@@ -121,6 +149,7 @@ class YoloBody(nn.Module):
     
     def forward(self, x):
         #  backbone
+        x = self.AOD(x)         #加载去雾模块
         feat1, feat2, feat3 = self.backbone.forward(x)
         
         #------------------------加强特征提取网络------------------------# 
